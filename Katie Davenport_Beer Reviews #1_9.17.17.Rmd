@@ -1,0 +1,566 @@
+---
+title: "Beer Reviews Analysis 1"
+author: "Katie Davenport"
+date: "September 17, 2017"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+##Introduction 
+
+To assist me in my efforts to learn the R programming language Tanya Cashorali emailed me her "One-Size-Fits-All Interview Kit" based on a BeerAdvocate dataset of 1.5 million beer reviews.  The test questions are: 
+
+1. Which brewery produces the strongest beers by ABV%?
+2. If you had to pick 3 beers to recommend using only this data, which would you pick?
+3. Which of the factors (aroma, taste, appearance, palette) are most important in determining the overall quality of a beer?
+4. Lastly, if I typically enjoy a beer due to its aroma and appearance, which beer style should 3
+I try?
+
+
+###Goals
+
+My goals for this exercise are to: 
+
+* Learn basic R
+* Learn basic R Markdown
+* Answer test questions using basic data manipulation / aggregation and linear regression
+* Create a baseline for future improvements / analysis
+* Create a document with which I can start a portfolio 
+
+
+###Resources 
+
+The resources I relied on for this exercise include: 
+
+* James, Gareth, et al. *An Introduction to Statistical Learning with Applications in R*. Springer, 2015. 
+* Microsoft Corporation. *DAT204x: Introduction to R for Data Science*, edX. Web. Completed March 30, 2017. 
+* Robinson, David. *Exploratory Data Analysis in R*, Datacamp. Web. Accessed July 2017. 
+* www.stackoverflow.com.
+
+
+###BeerAdvocate's Rating System  
+
+Before diving into data prep and analytic work, I wanted to fully understand BeerAdvocate's rating system, as it provides important context and may inform my approach. The system is explained here: www.beeradvocate.com/community/threads/how-to-review-a-beer.241156/. Key points include: 
+
+* A final user rating is comprised of five ratable attributes:  Appearance (Look), Smell, Taste, Mouthfeel (Feel), and Overall. 
+* All attributes are rated on a scale of 1 (worst) to 5 (best) with 0.25 increments.
+* A weighting system inspired by several professional beer judging scoring systems is used whereby a final user rating is calculated by applying the weights in the table below to the five attributes.  
+ 
+
+|Attribute               |Weight
+|------------------------|-------
+|Appearance (Look)       |6%
+|Smell                   |24%
+|Taste                   |40%
+|Mouthfeel (Feel)        |10%
+|Overall                 |20%
+|Total Beer Rating (TBR) |100%     
+
+
+Note that I originally assumed that the first four attributes (Appearance, Smell, Taste, Mouthfeel) would be considered  independent variables, which would contribute to the "Overall" attribute (dependent variable).  
+
+To test if the weights used in BeerAdvocate's rating system are similar to the parameters resulting from a linear regression using the "Overall" attribute as the dependent variable, I will normalize the weights of the other four attributes using the sum of their weights as the denominator: 
+
+|Attribute               |Original Weight       |Normalized Weight
+|------------------------|----------------------|-------------------   
+|Appearance              |6%                    |6% / 80% = 7.5%
+|Smell (Aroma)           |24%                   |24% / 80% = 30%
+|Taste                   |40%                   |40% / 80% = 50% 
+|Mouthfeel (Palate)      |10%                   |10% / 80% = 12.5%
+|Overall                 |Dependent Variable    |N/A
+
+
+###Load and Prep Data
+
+The first task in the analysis is to load and view the data.  The following code is used to extract the data from a tarball and load it into R: 
+
+```{r}
+fn <- "https://s3.amazonaws.com/demo-datasets/beer_reviews.tar.gz"      
+download.file(fn,destfile="tmp.tar.gz")                                
+untar("tmp.tar.gz",list=TRUE)
+untar("tmp.tar.gz",files="beer_reviews/beer_reviews.csv")
+
+Reviews<-read.csv("beer_reviews/beer_reviews.csv")  
+```
+
+By viewing the structure of the file, I observe that the dataset includes 1,586,614 observations with 13 variables.  Listed in order by index number (from left to right) these variables are:  
+
+* brewery_id:          Brewery ID#
+* brewery_name:        Brewery name
+* review_time:         Review time
+* review_overall:      Review for the overall attribute
+* beer_style:          Beer style
+* review_appearance:   Review for the appearance (a.k.a look) attribute 
+* review_profilename:  Profile name of reviewer
+* review_aroma:        Review for the aroma attribute
+* review_taste:        Review for the taste attribute
+* review_palate:       Review for the palate (a.k.a feel or mouthfeel) attribute
+* beer_name:           Beer name          
+* beer_abv:            Beer ABV%
+* beer_beerid:         Beer ID#
+
+Note that all attribute ratings are in 0.5 increments, which contradicts the BeerAdvocate rating system description specifying 0.25 increments. 
+
+
+###Data Preparation
+
+**Clean-up**
+
+After re-ordering the data into a readable format, I perform basic data cleaning tasks by checking for duplicates, missing data, and outliers. 
+
+*Duplicates*
+
+To check for duplicates I confirm that the number of distinct rows matches the total number of rows in the data set. It does. 
+
+```{r}
+Reviews2 <- Reviews[c(13,11,1:2,5,12,6,8:10,4,7,3)]
+library(dplyr)
+n_distinct(Reviews2, na.rm = FALSE)
+```
+
+*Missing Data*
+
+Running a summary of the data shows that the only column with missing data (null values) is beer_abv. Thus, null values will only need to be addressed in question 1.
+
+*Outliers*
+
+In the context of this dataset, I would consider ratings of less than 1 to be "outliers", as they are not defined by BeerAdvocate's 1 to 5 rating scale. I first select observations that have ratings of <1.  (The columns with ratings are at index number 7 through 11.) 
+
+```{r}
+Invalid <- Reviews2[Reviews2[,7]<1 | Reviews2[,8] <1 | Reviews2[,9] <1 | Reviews2[,10] <1 | Reviews2[,11] <1, ]
+```
+
+There are seven observations with an attribute rating of less than 1, all of which are provided by the reviewer "beernut7".  All seven have ratings of zero for the appearance and overall attributes.  
+
+It is possible that beernut7 does not fully understand the rating system. It is also possible that the ratings in question are meant to be null. For instance, perhaps beernut7 intended not to rate the appearance or overall category for these particular reviews. 
+
+To gain more perspective, I filtered out all of beernut7's reviews: 
+
+```{r}
+beernut7<-Reviews2 %>% filter(review_profilename=='beernut7') %>% summarize(number=n())
+beernut7
+```
+
+Beernut7 submitted 790 reviews. Because of this high volume (the seven ratings in question represent less than 1% of Beernut7's total reviews), I conclude that that Beernut7 does understand the rating system. Thus, I will remove the seven ratings in question rather than the full Beernut7 dataset: 
+```{r}
+Reviews3 <- subset(Reviews2, review_appearance>=1)
+```
+
+
+**BeerAdvocate's Total Beer Rating (TBR)**
+
+After completing these data clean-up tasks I add a column titled "TBR" to calculate the BeerAdvocate rating system's total beer rating with the weights applied to the five individual attributes. This will serve as an additional measure of overall beer quality. 
+
+```{r}
+Reviews4 <- Reviews3 %>% mutate(TBR = review_appearance*.06 + review_aroma*.24 + review_taste*.4 + review_palate*.1 + review_overall*.2)
+Reviews4 <- Reviews4[c(1:11,14,12:13)]
+```
+
+
+**Remove beers with too few observations**
+
+My final task before moving onto the questions is to remove beers with too few observations. To aid in determining an appropriate cutoff, I want to get a picture of the distribution of the number of reviews. 
+
+I first generate a summary table of number of reviews by beer.  There are 56,847 total beers with a minimum of one review and a maximum of 3,290 reviews. 
+
+```{r}
+BeerObs1 <- Reviews4 %>% group_by(beer_name) %>% summarize(Reviews=n()) %>% arrange(desc(Reviews))
+BeerObs1 %>% summarize(total_beers=n(), min_reviews = min(Reviews), max_reviews = max(Reviews))
+```
+
+The histogram below shows the high proportion of beers with a small number of reviews. Close to 40,000 beers have 10 reviews or less (first bin of width 10).  
+
+```{r}
+library(ggplot2)
+ggplot(BeerObs1, aes(Reviews), width=5, height=5) + geom_histogram(binwidth=10) + labs(x = "Number of Reviews", y= "Beer Count", title="Histogram: Number of Reviews", subtitle="(binwidth = 10)")
+```
+
+ 
+Internet research indicates that somewhere between 50 and 100 is a sufficient number of observations from the standpoint of statistical accuracy.  David Robinson used 100 as a threshold for his analysis in his "Exploratory Data Analysis in R" course.
+
+The following summary shows that 91.0% of beers have 50 or fewer reviews and 94.5% have 100 or fewer reviews.  Because of the high proportion of beers with a small number of reviews, I will select the lower threshold of 50 reviews to preserve as many beers as possible while maintaining the statistical integrity of the results.  However, I will have less confidence in recommending beers with a relatively small number of reviews.  
+
+```{r}
+BeerObs1 %>% summarize(total = n(), fifty_or_less = mean(Reviews<=50), hundred_or_less = mean(Reviews<=100))
+```
+
+
+I remove beers with 50 or less observations with the following code: 
+
+```{r}
+Reviews5 <- merge(Reviews4,BeerObs1)
+colnames(Reviews5)[15]<-"reviews_#"
+Reviews6 <- Reviews5[c(1:2,15,3:14)]
+Reviews7 <- Reviews6 %>% filter(`reviews_#`>=50)
+```
+
+
+##Analysis
+
+###Baseline Information
+
+**Basic Statistics**
+
+Before diving into the questions, I generated a few basic statistics on the working dataset: 
+
+* 1,287,307 reviews (observations)
+* 5,172 beers (248.9 average reviews per beer)
+* 2,225 breweries
+* 103 beer styles 
+* 31,031 reviewers 
+
+
+**Ratings: Individual Attributes**
+
+I also generated box plots for each of the five attributes to understand their rating distributions. All have a median rating of 4. The palate, aroma, and appearance attributes all have the same distribution with a left skew and relatively low variability. The taste and overall attributes also have identical distributions, also with a left skew but slightly more variability than the first set of attributes.  
+
+
+```{r}
+library(tidyr)
+Reviews7_g <- gather(Reviews7, attribute, rating, review_appearance, review_aroma, review_taste, review_palate, review_overall)
+ggplot(Reviews7_g, aes(attribute, rating, width=5, height=5))+geom_boxplot()+coord_flip() + labs(x = "Attribute", y= "Rating", title="Box Plots of Attribute Ratings")
+```
+
+
+**Relationship Among Attributes**
+
+The statistical techniques used in questions 2 through 4 include a linear regression with the overall attribute serving as the dependent variable.  Scatter plots of the overall attribute with each of the four independent variables (the other rating attributes) provide a good summary of the relationship among the variables. 
+
+Adding a linear regression line to the scatter plots shows a clear positive relationship between all independent variables and the dependent variable. The taste and palate attributes appear to have a steeper slope than the appearance and aroma attributes, meaning that any given unit increase in the taste and palate attributes should have a greater impact on the overall attribute than the appearance and aroma attributes. 
+
+```{r}
+plot1<- ggplot(Reviews7, aes(review_appearance, review_overall))+geom_count()+stat_summary()+geom_smooth(method='lm') + labs (x="Appearance", y = "Overall")
+plot2<- ggplot(Reviews7, aes(review_aroma, review_overall))+geom_count()+stat_summary()+geom_smooth(method='lm') + labs (x="Aroma", y = "Overall")
+plot3<- ggplot(Reviews7, aes(review_taste, review_overall))+geom_count()+stat_summary()+geom_smooth(method='lm') + labs (x="Taste", y = "Overall")
+plot4<- ggplot(Reviews7, aes(review_palate, review_overall))+geom_count()+stat_summary()+geom_smooth(method='lm') + labs (x="Palate", y = "Overall")
+library(gridExtra)
+grid.arrange(plot1, plot2, plot3, plot4, nrow=2, ncol=2) 
+```
+
+
+
+###QUESTION 1: Which brewers produce the strongest beers ABV%
+
+**Data Preparation**
+
+When exploring which brewers produce the strongest beers, I first remove observations will null values in the ABV% column:
+
+```{r}
+Reviews_ABV<- Reviews7 %>% filter(!is.na(beer_abv))
+```
+
+**Measuring Beer Strength by ABV%**
+
+Because beer styles are characterized by varying ABV%s, I take beer style into consideration when assessing beer strength. For instance, an ABV% of 8% would be considered weak for most stouts but strong for most lagers. The following set of box plots helps visualize how variable ABV%s are based upon beer style. 
+
+```{r}
+ABV_Style <- Reviews_ABV %>% group_by(beer_style) %>% summarize(style_mean_abv = mean(beer_abv), style_sd_abv = sd(beer_abv), Reviews=n())
+Reviews_ABV1<- merge(Reviews_ABV,ABV_Style) 
+ggplot(Reviews_ABV1, aes(beer_style, beer_abv, width=8, height=10))+geom_boxplot()+coord_flip()+ labs(x = "Style", y= "ABV%", title="Box Plots of Beer Style ABV%s") + theme(axis.text = element_text(size=6))
+```
+
+To factor beer style into my recommendations I first calculate the standard score (z-score) for each beer with respect to its style:  
+
+* Standard score = ((individual beer ABV% - mean ABV% for beer style)/standard deviation of ABV% for beer style)
+  
+The standard score tells us how many standard deviations an individual beer is above or below the mean ABV% for that beer's particular style.  Beers with positive standard scores have strong ABV%s whereas beers with negative standard scores have week ABV%s.  A beer with a standard score of 0 would have an ABV% equal to the mean for its particular style.   
+
+To help answer the question I create a summary table by brewer that includes: the number of beers produced ("beers") and the mean ABV% standard score of the beers produced ("mean_beer_abv_ss"). The table is sorted from the highest to lowest mean standard score by brewer with the top 10 observations shown below.  Note that the full data set includes 1,105 individual brewers. 
+
+```{r}
+Reviews_ABV2 <- Reviews_ABV1 %>% mutate(beer_abv_ss = ((beer_abv - style_mean_abv) / style_sd_abv))
+
+ABV_Brewer <- Reviews_ABV2 %>% group_by(brewery_name) %>% summarize(beers = n_distinct(beer_name), mean_beer_abv_ss = mean(beer_abv_ss), min_beer_abv_ss = min(beer_abv_ss)) %>% arrange(desc(mean_beer_abv_ss))
+
+head(ABV_Brewer,10)
+```
+
+**Narrowing Down the Dataset**
+
+The table above shows that many of the brewers that produce the highest mean standard scores produce only 1 or 2 beers. Further, the histogram below shows that approximately 700 of the 1,105 breweries in the data set produce just one beer. An additional 300+ produce only two beers.
+
+Note that the question asks about brewers that produce strong beers in the plural. I interpret this to mean that they must produce at least two strong beers. Therefore, I eliminate brewers producing one beer, as well as brewers producing two beers one of which has a negative standard score. 
+
+```{r}
+ggplot(ABV_Brewer, aes(beers), width=5, height=5)+geom_histogram(binwidth=1) + labs(x = "Number of Beers Produced", y= "Brewery Count", title="Histogram: Number of Beers", subtitle="(binwidth = 1)")
+```
+
+
+**Answer**
+
+To answer the question I perform the following steps:  
+
+* Remove all brewers producing only one beer.
+* Remove brewers that produce two beers, one of which is weak (negative standard score).
+* Create a manageable subset of brewers to review in more detail by tagging those with a mean standard score of greater than 0.75. 
+* Create a new column "brewery_ABV" that multiplies mean_beer_abv_ss by number of beers to get a measure incorporating both beer strength and number of beers produced to serve as a cutoff for scatter plot labeling to allow for better readability.  
+* Create a scatter plot of brewers with the mean standard score on the y-axis and the number of beers produced on the x-axis.
+
+```{r}
+## Creating dataset
+ABV_Brewer1 <- ABV_Brewer %>% filter(!beers == 1)
+Brewers_Remove <- ABV_Brewer1 %>% filter(beers == 2 & min_beer_abv_ss<=0) %>% mutate(tag="x")
+ABV_Brewer2 <- left_join(ABV_Brewer1,Brewers_Remove) %>% filter(is.na(tag)) %>% mutate(tag2=if_else(mean_beer_abv_ss>=0.75, TRUE, FALSE)) %>% filter(tag2==TRUE) %>% mutate(brewery_ABV=mean_beer_abv_ss*beers) %>% arrange(desc(brewery_ABV))
+
+## Scatter plot
+ABV_Brewer2 %>% ggplot(aes(beers, mean_beer_abv_ss, label=brewery_name))+geom_jitter()+geom_text(aes(label=ifelse(brewery_ABV>5,as.character(brewery_name),'')),angle=30, hjust=-.1,check_overlap=TRUE, size=2)+coord_cartesian(ylim=c(0.75,3.5), xlim=c(1,50)) + labs(x = "Number of Beers Produced", y = "Mean ABV% Standard Score", title = "Brewers by Number of Beers Produced and ABV% Standard Score", subtitle = "(Mean Standard Scores > 0.75)")
+```
+
+The "finalists" shown in the table below are selected from the graph.  They comprise the outer boundary of the plot and represent the best combination of standard score and number of beers produced.  I selected the beers in the table below as finalists.  Note that White Birch Brewing represents the point in the upper left corner next to Kind Beers Brewing (I am not certain why the label is not showing up). 
+
+|Brewery Name            |  Beers(#)  |  Beer Styles (#)
+|------------------------|------------|-------------------  
+|Kind Beers Brewing      |    2       |    2
+|White Birch Brewing     |    2       |    2
+|Barley John's Brew Pub  |    9       |    8
+|Cigar City Brewing      |    27      |    15
+|The Bruery              |    38      |    22
+|DogfishHead Brewery     |    42      |    25
+
+
+I create dot plots for each of the six final breweries and a table showing the proportion of beers that are weak (negative standard score) or either weak or slightly strong (standard score of less than 0.5) to further inform my answer: 
+```{r}
+Beers_StrongBrewers <- Reviews_ABV2 %>% filter(brewery_name %in% c("Kind Beers Brewing", "White Birch Brewing", "Barley John's Brew Pub", "Cigar City Brewing", "The Bruery", "Dogfish Head Brewery")) %>% select(beer_name, beer_beerid, brewery_id, brewery_name, beer_style, beer_abv, beer_abv_ss) %>% distinct()
+
+ggplot(Beers_StrongBrewers, aes(beer_abv_ss))+geom_dotplot()+facet_wrap(~brewery_name) + labs(x = "Mean ABV% Standard Score", y = "Beer Count", title = "Top Brewers: ABV% Standard Scores of Beers Produced", subtitle = "(Each dot represents one beer)")
+
+Beers_StrongBrewers %>% group_by(brewery_name) %>% summarize (Percent_Negative = mean(beer_abv_ss<0), Percent_Below_0.5 = mean(beer_abv_ss < .5))
+
+```
+
+Through process of elimination, I select the following three breweries as an answer to the question: 
+
+* White Birch Brewing
+* Cigar City Brewing
+* The Bruery
+
+I eliminate the other three breweries for the following reasons: 
+
+* Kind Beers Brewing:     produces only two beers, one of which has a standard score very close to 0 (only one strong beer)
+* Barley John's Brew Pub: high proportion of weak or only slightly strong beers produced
+* Dogfish Head Brewery:   high proportion of weak or only slightly strong beers produced
+
+
+
+###QUESTION 2: Which factors (aroma, taste, appearance, palette) are most important in determining quality of beer? 
+
+**Multiple Linear Regression**
+
+I will use a multiple linear regression model to answer this question. My hypothesis is that all four "independent variables" have an impact on our dependent variable.
+
+```{r}
+lm_Q2 <- lm(review_overall ~ review_appearance + review_aroma + review_taste + review_palate, data = Reviews7)
+summary(lm_Q2)
+```
+
+The regression equation takes the form: 
+
+y = 0.50 + 0.03*x_ap + 0.04*x_ar + 0.55*x_ta + 0.26*x_pa, where: 
+
+* y = review_overall
+* x_ap = review_appearance
+* x_ar = review_aroma
+* x_ta = review_taste
+* x_pa = review_palate
+
+The p-values of all variables are very small. Thus, we can reject the null hypothesis that some variables do not help determine overall beer quality. The large F-statistic for the model (5.637e+5 or 563,700) and corresponding small p-value for the equation (2.2e-16) provide further evidence of the strength of the relationship between independent and dependent variables. 
+
+
+**Assessing Model Accuracy**   
+
+The accuracy of the model can be assessed using the residual standard error (RSE) and the R-squared.  The RSE, an estimate of the standard deviation of the error term, is 0.43.  In this dataset, the mean value of the overall review attribute is 3.85.  Thus, the average percent error of the observations compared to the regression line is 11.2% (0.43/3.85 =  0.112). The R-squared, the proportion of variance explained, is 0.637 (63.7%).  Both the RSE and R-squared values suggest that the model fits the data reasonably well.   
+
+
+**Answer**
+
+The regression coefficients show that, holding all other coefficients constant, taste is by far the most important factor in determining the overall rating followed by palate (mouthfeel).
+
+
+**Multiple Linear Regression versus BeerAdvocate Rating System**
+
+Recall that we normalized BeerAdvocate's (BA) rating system so that the weights applied to the four attributes serving as independent variables sum to 100%. As shown in the table below, we also normalize the regression coefficients so that they sum to 100%, allowing us to compare the factor weights between BeerAdvocate's system and our regression equation.   
+
+|Attribute          |BA Weight |BA Normalized Weight | Regression Weight | Normalized Regression Weight
+|-------------------|----------|---------------------|-------------------|------------------------------   
+|Appearance         |6%        |6% / 80% = 7.5%      |0.034              |0.034 / 0.876 = 0.039 (3.9%)    
+|Smell (Aroma)      |24%       |24% / 80% = 30%      |0.041              |0.041 / 0.876 = 0.046 (4.6%)
+|Taste              |40%       |40% / 80% = 50%      |0.545              |0.545 / 0.876 = 0.622 (62.2%)
+|Mouthfeel (Palate) |10%       |10% / 80% = 12.5%    |0.256              |0.256 / 0.876 = 0.292 (29.2%)
+|Overall            |20%       |N/A (dependent var)  |N/A                |N/A
+
+
+Both the BeerAdvocate system and our regression equation indicate that taste has the greatest impact on the overall quality of the beer.  Interestingly, the factor with the second greatest impact on overall quality differs between the two systems; It is smell (aroma) for the BeerAdvocate system and mouthfeel (palate) in the regression equation.   
+
+
+###QUESTION 3: If you had to pick 3 beers, which? 
+
+**Data Prep**
+
+To answer this question I create a table with summary information by beer that will factor into my picks.  First, I include all measures of overall beer quality: 
+
+* mean_regression2: the mean of the regression equation results
+* mean_review_overall: the mean review for the overall attribute (the dependent variable)
+* mean_TBR: the mean BeerAdvocate Total Beer Rating (TBR)
+
+I also include the following information, which may also factor into my decision: 
+
+* reviews_#: the number of reviews
+* beer_style: beer style
+* beer_abv: beer abv%
+* brewery_name: brewery
+
+I sort beers in descending order by regression equation results and include the top 10 in a table of finalists to consider. 
+
+```{r}
+Q3_detail <- Reviews7 %>% select(beer_name, 'reviews_#', beer_style, beer_abv, brewery_name) %>% distinct()
+
+Reviews7_Reg2 <- Reviews7 %>% mutate(fitted_y = 0.5044987 + 0.0339343*review_appearance + 0.0406966*review_aroma + 0.5452705*review_taste + 0.256404*review_palate) %>% mutate(resid = fitted_y - review_overall)
+
+Q3_summary <- Q3_summary <- Reviews7_Reg2 %>% select(beer_name, review_overall, TBR, fitted_y)%>% group_by(beer_name) %>% summarise(mean_regression2 = mean(fitted_y), mean_review_overall = mean(review_overall), mean_TBR = mean(TBR))
+
+Q3_summary_detail <- left_join(Q3_summary, Q3_detail) %>% arrange(desc(mean_regression2))
+head(Q3_summary_detail,40)
+```
+
+**Decision Criteria**
+
+When formulating an answer I will select a grouping that provides as much variety as possible in terms of: beer style, country of origin, and ABV%. The following BeerAdvocate overview on beer styles is a helpful resource:  www.beeradvocate.com/beer/style/.  
+
+I also consider the total number of beer reviews, as there is greater confidence in ratings with more observations. Further, a high number of ratings could be considered an indication of beer popularity. 
+
+After reviewing the composition of the top 10 beers by regression result, I decide to select one in each of the following categories:  
+
+* an ale, 
+* a stout, and 
+* a Belgian ale (gueuze or quad)
+
+I will also select one in each of the following three ABV% categories: 
+
+* Low:      less than or equal to 8%
+* Medium:   greater than 8% up to 11%
+* High:     greater than 11% 
+
+**Answer**
+
+I select two groupings that satisfy these criteria. 
+
+Group A: 
+
+* Vanilla Bean Aged Dark Lord (stout, Russian, high ABV)             (152 reviews)
+* Trappist Westvleteren 12 (Belgian ale, Belgian, medium ABV)        (1,272 reviews)
+* Deviation - Bottleworks 9th Anniversary (ale, American, low ABV)   (112 reviews)
+
+Group B:
+
+* Armand'4 Oude Geuze Lente (Spring) (Belgian ale, Belgian, low ABV) (65 reviews)
+* Vanilla Bean Aged Dark Lord (stout, Russian, high ABV)             (152 reviews)
+* Pliny The Younger (ale (IPA), American, medium ABV)                (610 reviews)
+
+There are trade-offs to each grouping.  Group A represents more overall reviews, but Group B has higher overall ratings.  As I think about the practicality of purchasing these beers and the cost involved I select Group A, as I suspect that more reviews may indicate greater availability and lower cost.  Further, as mentioned, the number of reviews could be an indication of popularity.
+
+
+###QUESTION 4: Which style should I pick if I value aroma & appearance? 
+
+**Multiple Linear Regression**
+
+As with question two, I create a basic multiple linear regression model to answer this question, but with the appearance and aroma attributes as the only two independent variables. Interestingly, these two attributes have the lowest regression coefficients (weights) in our first regression. As before, our hypothesis is that both independent variables have an impact on our dependent variable.  The null hypothesis is that they do not.   
+
+```{r}
+lm_Q4 <- lm(review_overall ~ review_appearance + review_aroma, data = Reviews7)
+summary(lm_Q4)
+```
+
+The equation takes the following form: 
+
+y = 1.02 + 0.26*x_ap + 0.48*x_ar, where:  
+
+* y = review_overall
+* x_ap = review_appearance
+* x_ar = review_aroma
+
+As in question two, the p-values indicate a statistically significant relationship between both independent variables and the dependent variable, the overall review attribute.  Thus, we can reject the null hypothesis. The large F-statistic for the model (4.131e+5 or 413,100) and corresponding small p-value for the equation (2.2e-16) provide further evidence of the strength of the relationship between independent and dependent variables. 
+
+
+**Assessing Model Accuracy**   
+
+Again, the residual standard error (RSE) and the R-squared help us to assess model accuracy.  The RSE is 0.55 for this model. Thus, the average percent error of the observations compared to the regression line is 14.3% (0.55/3.85 =  0.143).  This is only slightly higher than the regression equation in question two that includes all four variables. However, the R-squared of 0.391 (39.1%) is significantly lower than in the question two regression equation.  This makes sense considering that in the first regression the two independent variables included have the smallest coefficients, or individual impact on the overall attribute.  
+
+
+**Data Prep** 
+
+To answer the question I create a table with summary information by beer style.  First, I include all measures of beer quality that focus on aroma and appearance: 
+
+* mean_regression4: the mean of the regression equation result
+* mean_aroma: the mean review for the aroma attribute
+* mean_appearance: the mean review for the appearance attribute
+
+I also include additional variables that may impact my decision:  
+
+* reviews_#: the number of review
+* beer_style: beer style
+* beer_abv: beer ABV%
+* brewery_name: brewery
+
+I sort beers in descending order by regression equation results and include the top 10 in a table of finalists. 
+
+```{r}
+Reviews7_Reg4 <- Reviews7 %>% mutate(fitted_y = 1.0155807 + 0.2603565*review_appearance + 0.4837717*review_aroma) %>% mutate(resid = fitted_y - review_overall)
+
+Style_Q4 <- Reviews7_Reg4 %>% group_by(beer_style) %>% summarize(mean_regression4 = mean(fitted_y), mean_aroma = mean(review_aroma), mean_appearance = mean(review_appearance), beers = n_distinct(beer_name), brewers=n_distinct(brewery_name), reviews=n()) %>% arrange(desc(mean_regression4))
+
+head(Style_Q4, 10)
+```
+
+
+I create a scatter plot of the beer styles with the aroma and appearance on the x and y axes. 
+
+```{r}
+Style_Q4 %>% ggplot(aes(mean_aroma, mean_appearance, height=5, width=5)) + geom_jitter() + geom_text(aes(label = ifelse(mean_regression4 >= 4, as.character(beer_style),'')),angle = 30, hjust = -.1, check_overlap = TRUE, size=2) + coord_cartesian (ylim = c(3.9,4.4), xlim = c(3.9,4.4)) + labs(x = "Mean Rating: Aroma", y = "Mean Rating: Appearance", title = "Beer Style: Mean Aroma and Mean Appearance Ratings")
+```
+
+
+**Answer**
+
+As shown in the table, the American Double / Imperial Stout style has the highest regression result, indicating the best overall rating based upon appearance and aroma.  In the scatter plot the American Double / Imperial Stout is closest to the upper right corner of the graph.  Though the Russian Imperial Stout has a superior appearance and the Eisbock has a superior aroma, the American Double / Imperial Stout represents the best combination of both attributes.  
+
+
+###Future Analysis
+
+**Limitations of Linear Regression**
+
+This analysis focused on basic data manipulation / aggregation and linear regression.  However, typical problems associated with linear regression are present with this data set.  These include:  non-linearity of the response predictor relationship and collinearity (James, Gareth, et al., p.92). 
+
+
+**Non-linearity**
+
+The linear regression model assumes a straight line relationship between predictors and response. The following plots of the residuals versus predicted values for the regression equations used in questions two and four both show a non-linear relationship. This can significantly reduce the accuracy of the model. One way to address this would be to incorporate a non-linear transformation of the predictors in the regression model. 
+
+```{r}
+plot1b <- ggplot(Reviews7_Reg2, aes(fitted_y, resid)) + geom_smooth() + labs(x = "Fitted Values", y = "Residuals", title = "Question 2 Residual Plot")
+plot2b <- ggplot(Reviews7_Reg4, aes(fitted_y, resid)) + geom_smooth() + labs(x = "Fitted Values", y = "Residuals", title = "Question 4 Residual Plot")
+grid.arrange(plot1b, plot2b, nrow=1, ncol=2)
+```
+
+
+**Collinearity**
+
+Collinearity occurs when predictor variables are correlated, making it hard to separate out the individual impact of the independent variable on the response.  This reduces the accuracy of the regression coefficients. The following correlation matrix shows the high collinearity among variables in this analysis with individual correlations ranging from 0.49 to 0.78.  Potential solutions to this problem include dropping variables or combining variables.  
+
+
+|Attribute   |Appearance |Aroma    |Taste   | Palate  |Overall
+|------------|-----------|---------|--------|---------|-------   
+|Appearance  | 1.00      |0.55     |0.54    |0.56     |0.49
+|Aroma       |           |1.00     |0.71    |0.61     |0.60
+|Taste       |           |         |1.00    |0.73     |0.78
+|Palate      |           |         |        |1.00     |0.69
+|Overall     |           |         |        |         |1.00
+
+NOTE: The correlation matrix is not rendering in R Markdown, but the code used is: cor(Reviews7[8:12])
+
+
+**Future Analysis** 
+
+Future iterations of this analysis could focus on improving the existing linear regression techniques using common methods to address non-linearity and collinearity. Future work could also include additional linear methods such as principal component analysis as well as applicable non-linear techniques.  In all cases, James, Gareth, et al.'s text could serve as a useful guide. 
+
+Additional goals would be to improve upon plot and R Markdown formatting and to incorporate other tools such as Tableau or R Shiny.
