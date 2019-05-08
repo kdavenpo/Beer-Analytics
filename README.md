@@ -1,11 +1,8 @@
 # Beer-Reviews
 
-TCB Analytics provided this "One-Size-Fits-All Interview Kit" as a training exercise. The dataset consists of 1.5 million 
-beer reviews from Beer Advocate and asked that it be completed in R or Python. I completed the assignment in an R Markdown 
-document and saved it to HTML. Both files are saved in the repository. 
+TCB Analytics kindly provided me with this "One-Size-Fits-All Interview Kit" as a training exercise. The dataset consists of 1.5 million beer reviews from Beer Advocate and asked that it be completed in R or Python. I completed the assignment in an R Markdown document and saved it to HTML. Both files are saved in the repository. 
 
-Following are the questions and instructions 
-provided: 
+Following are the questions and instructions provided: 
 
 1.	Which brewery produces the strongest beers by ABV%?
 2.	If you had to pick 3 beers to recommend using only this data, which would you pick?
