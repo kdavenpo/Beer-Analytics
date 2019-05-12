@@ -1,6 +1,6 @@
 # Beer-Reviews
 
-TCB Analytics kindly provided me with this "One-Size-Fits-All Interview Kit" as a training exercise. The dataset consists of 1.5 million beer reviews from Beer Advocate and asked that it be completed in R or Python. I completed the assignment in an R Markdown document and saved it to HTML. Both files are saved in the repository. To view the HTML copy and paste the link address here: https://htmlpreview.github.io/ .
+TCB Analytics kindly provided me with this "One-Size-Fits-All Interview Kit" as a training exercise. The dataset consists of 1.5 million beer reviews from Beer Advocate and asked that it be completed in R or Python. The completed assignment is posted in the repository as an R Markdown document (.Rmd) and as an HTML (.html). To view the HTML copy and paste the link address here: https://htmlpreview.github.io/.
 
 Following are the questions and instructions provided: 
 
